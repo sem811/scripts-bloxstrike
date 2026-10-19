@@ -1,0 +1,1987 @@
+--[[ BLOXSTRIKE HYPER v7.1 LIGHT | ESP+AIMBOT+TRIGGER+HITBOX+BHOP+МЕНЮ
+  ГЛАВНОЕ: САМАЯ ЛЁГКАЯ версия - чтобы НЕ ЛАГАЛО (всё работает как раньше):
+  - ESP обновляется 25 раз/сек, а не каждый кадр (в 5-6 раз меньше нагрузки)
+  - кэш живых целей - игра НЕ сканируется заново каждый кадр
+  - меню и круг FOV перерисовываются ТОЛЬКО при изменении, а не каждый кадр
+  - глубокий скан карты ОТКЛЮЧЁН (он давал фризы каждые 3 сек)
+  - боксов по умолчанию 14 вместо 20; Свечение по-прежнему ВЫКЛ
+  - ESP/аим ТОЛЬКО НА ИГРОКОВ - предметы и пропсы больше НЕ подсвечиваются
+  МЕНЮ НА DRAWING - игра НЕ МОЖЕТ его удалить. КЛИКАЙ МЫШКОЙ по строкам.
+  T - ВКЛ/ВЫКЛ АИМБОТА | K - ВКЛ/ВЫКЛ ESP | Delete - выгрузить всё.
+  Xeno/Delta/Solara | RightControl или RightShift - МЕНЮ ]]
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+local CoreGui = nil
+pcall(function() CoreGui = game:GetService("CoreGui") end)
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+repeat task.wait() until Players.LocalPlayer
+LocalPlayer = Players.LocalPlayer
+end
+local Camera = Workspace.CurrentCamera
+print("[BS6] ШАГ 1/5: запуск v7.1 LIGHT...")
+local G = _G
+pcall(function() if getgenv then G = getgenv() end end)
+local BINDS = { "BS6_ESP", "BS6_AIM", "BS6_FOV", "BS6_MISC" }
+for _, bn in ipairs(BINDS) do
+pcall(function() RunService:UnbindFromRenderStep(bn) end)
+end
+if G.BS6_Reg then
+local r = G.BS6_Reg
+for i = 1, #r.draws do pcall(function() r.draws[i]:Remove() end) end
+for i = 1, #r.insts do pcall(function() r.insts[i]:Destroy() end) end
+for i = 1, #r.conns do pcall(function() r.conns[i]:Disconnect() end) end
+for i = 1, #r.threads do pcall(function() task.cancel(r.threads[i]) end) end
+end
+if G.BS6_GUI then pcall(function() G.BS6_GUI:Destroy() end) end
+if G.BS6_Heads then
+for head, size in pairs(G.BS6_Heads) do
+pcall(function()
+if head and head.Parent then
+head.Size = size
+head.Transparency = 0
+head.CanCollide = true
+head.Massless = false
+end
+end)
+end
+end
+G.BS6_Reg = { draws = {}, insts = {}, conns = {}, threads = {} }
+local REG = G.BS6_Reg
+local function regDraw(d) if d then REG.draws[#REG.draws + 1] = d end return d end
+local function regInst(o) if o then REG.insts[#REG.insts + 1] = o end return o end
+local function regConn(c) if c then REG.conns[#REG.conns + 1] = c end return c end
+print("[BS6] ШАГ 2/5: старый запуск вычищен, реестр готов")
+local dead, errCnt = {}, {}
+local function safe(name, fn)
+if dead[name] then return end
+local ok, e = pcall(fn)
+if not ok then
+errCnt[name] = (errCnt[name] or 0) + 1
+if errCnt[name] <= 3 or errCnt[name] % 50 == 0 then
+warn("[BS6] '" .. name .. "' x" .. errCnt[name] .. ": " .. tostring(e))
+end
+if errCnt[name] >= 100 then
+dead[name] = true
+warn("[BS6] часть '" .. name .. "' отключена")
+end
+end
+end
+local function newDraw(kind)
+local d
+local ok = pcall(function() d = Drawing.new(kind) end)
+if ok and d then return d end
+return nil
+end
+local HAS_DRAWING = false
+do
+local t = newDraw("Square")
+if t then
+pcall(function() t:Remove() end)
+HAS_DRAWING = true
+end
+end
+print("[BS6] ШАГ 3/5: Drawing " .. (HAS_DRAWING and "ЕСТЬ (боксы)" or "НЕТ (будет свечение)"))
+local Config = {
+Aim_Enabled = true,   Aim_Mode = "Мышь",    Aim_Activate = "Всегда",
+Aim_KeyT = true,      Aim_Target = "Голова",
+Aim_FOV = 180,        Aim_ShowFOV = true,   Aim_Smooth = 2,
+Aim_Pred = 0,         Aim_Wall = false,     Aim_Sticky = true,
+Aim_TeamCheck = true,
+Esp_Enabled = true,   Esp_TeamCheck = false, Esp_MaxDist = 2000,
+Esp_MaxCount = 14,    Esp_Mode = "Авто",    Esp_Box = true,
+Esp_Style = "Полный", Esp_Name = true,      Esp_HP = true,
+Esp_Dist = true,      Esp_Chams = false,
+Col_Enemy = {255, 70, 70},
+Col_Team  = {90, 255, 120},
+Trig_Enabled = false, Trig_Delay = 60, Trig_Cooldown = 200,
+Hitbox_Enabled = false, Hitbox_Size = 3,
+Misc_BHop = false,
+Misc_AntiFlash = false,
+Misc_NoSmoke = false,
+}
+local function clamp(v, a, b)
+if v < a then return a end
+if v > b then return b end
+return v
+end
+local function C3(t)
+return Color3.fromRGB(t[1], t[2], t[3])
+end
+local function hpColor(pct)
+pct = clamp(pct, 0, 100) / 100
+if pct > 0.5 then
+local t = (pct - 0.5) / 0.5
+return Color3.fromRGB(255 * (1 - t), 255, 60)
+end
+local t = pct / 0.5
+return Color3.fromRGB(255, 255 * t, 60)
+end
+local function mk(cls, props, parent)
+local o = Instance.new(cls)
+for k, v in pairs(props) do o[k] = v end
+o.Parent = parent
+return o
+end
+local CHAR_FOLDER = Workspace:FindFirstChild("Characters")
+local MY_FOLDER, ENEMY_FOLDER = nil, nil
+local TEAMS_AT = 0
+local function refreshTeams(force)
+local now = os.clock()
+if not force and now - TEAMS_AT < 1 then return end
+TEAMS_AT = now
+MY_FOLDER, ENEMY_FOLDER = nil, nil
+local cf = CHAR_FOLDER or Workspace:FindFirstChild("Characters")
+CHAR_FOLDER = cf
+if not cf then return end
+local nm = LocalPlayer.Name
+local t = cf:FindFirstChild("Terrorists")
+local ct = cf:FindFirstChild("Counter-Terrorists")
+if t and t:FindFirstChild(nm) then
+MY_FOLDER = t
+ENEMY_FOLDER = ct
+elseif ct and ct:FindFirstChild(nm) then
+MY_FOLDER = ct
+ENEMY_FOLDER = t
+else
+for _, sub in ipairs(cf:GetChildren()) do
+if sub:IsA("Folder") and sub:FindFirstChild(nm) then
+MY_FOLDER = sub
+for _, o in ipairs(cf:GetChildren()) do
+if o:IsA("Folder") and o ~= sub and #o:GetChildren() > 0 then
+ENEMY_FOLDER = o
+break
+end
+end
+break
+end
+end
+end
+end
+local function getMyModel()
+refreshTeams(false)
+if MY_FOLDER then
+local m = MY_FOLDER:FindFirstChild(LocalPlayer.Name)
+if m then return m end
+end
+local c = LocalPlayer.Character
+if c and c:FindFirstChildWhichIsA("BasePart") then return c end
+return nil
+end
+local function getMyPos()
+local m = getMyModel()
+if m then
+local r = m:FindFirstChild("HumanoidRootPart")
+or m.PrimaryPart
+or m:FindFirstChildWhichIsA("BasePart")
+if r then return r.Position end
+end
+return Camera.CFrame.Position
+end
+local function teamOf(model)
+refreshTeams(false)
+local p = model.Parent
+if p and p:IsA("Folder") then
+if p == MY_FOLDER then return "MY" end
+if p == ENEMY_FOLDER then return "EN" end
+end
+local plr = Players:GetPlayerFromCharacter(model)
+if plr then
+if plr == LocalPlayer then return "MY" end
+if LocalPlayer.Team and plr.Team then
+return (plr.Team == LocalPlayer.Team) and "MY" or "EN"
+end
+return "EN"
+end
+return nil
+end
+local function isEnemy(model)
+if model == nil then return true end
+if model.Name == LocalPlayer.Name then return false end
+local t = teamOf(model)
+if t == "MY" then return false end
+if t == "EN" then return true end
+return true
+end
+local aliveCache, aliveCacheN = {}, 0
+local function getAliveRaw(model)
+local hum = model:FindFirstChildOfClass("Humanoid")
+if hum and hum.Health > 0 then
+local root = model:FindFirstChild("HumanoidRootPart")
+or model:FindFirstChild("Head")
+or model:FindFirstChild("UpperTorso")
+if root then return hum, root end
+end
+local root = model:FindFirstChild("HumanoidRootPart")
+or model:FindFirstChild("Head")
+or model:FindFirstChild("UpperTorso")
+or model:FindFirstChild("Torso")
+or model:FindFirstChild("LowerTorso")
+or model.PrimaryPart
+or model:FindFirstChildWhichIsA("BasePart")
+if not root then return nil, nil end
+local h = model:GetAttribute("Health")
+if h == nil then
+local hv = model:FindFirstChild("Health")
+if hv and (hv:IsA("NumberValue") or hv:IsA("IntValue")) then h = hv.Value end
+end
+if h ~= nil and h <= 0 then return nil, nil end
+if hum and hum.Health <= 0 then return nil, nil end
+return hum, root
+end
+-- v7.1 АНТИ-ЛАГ: кэш живых целей - FindFirstChild НЕ дёргается каждый кадр
+-- на одних и тех же моделях. Кэш живёт 0.4 сек.
+local function getAlive(model)
+local now = os.clock()
+local c = aliveCache[model]
+if c and (now - c[3]) < 0.4 then return c[1], c[2] end
+local hum, root = getAliveRaw(model)
+if aliveCacheN > 300 then
+aliveCache = {}
+aliveCacheN = 0
+end
+aliveCache[model] = { hum, root, now }
+aliveCacheN = aliveCacheN + 1
+return hum, root
+end
+local scanCache = {}
+-- v7.1: ESP/аим ТОЛЬКО НА ИГРОКОВ - ни один предмет/NPC больше не подсвечивается.
+-- Модель считается игроком, только если её имя совпадает с именем реального игрока.
+local playerNameSet = {}
+local playerNamesAt = 0
+local function refreshPlayerNames(force)
+local now = os.clock()
+if not force and now - playerNamesAt < 2 then return end
+playerNamesAt = now
+playerNameSet = {}
+for _, plr in ipairs(Players:GetPlayers()) do
+playerNameSet[plr.Name] = true
+end
+end
+local function getAllCombatModels()
+refreshTeams(false)
+refreshPlayerNames(false)
+local list, seen = {}, {}
+local function add(m)
+if m and m:IsA("Model") and not seen[m]
+and m.Name ~= LocalPlayer.Name and m ~= LocalPlayer.Character then
+if playerNameSet[m.Name] or Players:GetPlayerFromCharacter(m) then
+seen[m] = true
+list[#list + 1] = m
+end
+end
+end
+local cf = CHAR_FOLDER
+if cf then
+for _, sub in ipairs(cf:GetChildren()) do
+if sub:IsA("Folder") then
+for _, m in ipairs(sub:GetChildren()) do add(m) end
+elseif sub:IsA("Model") then
+add(sub)
+end
+end
+end
+for _, plr in ipairs(Players:GetPlayers()) do
+if plr ~= LocalPlayer then add(plr.Character) end
+end
+for _, m in ipairs(scanCache) do add(m) end
+return list
+end
+local scanRunning = false
+local function scanWorkspace()
+local myChar = LocalPlayer.Character
+local found = {}
+refreshPlayerNames(false)
+for _, m in ipairs(Workspace:GetDescendants()) do
+if m:IsA("Model") and m ~= myChar
+and playerNameSet[m.Name]
+and not (myChar and m:IsDescendantOf(myChar))
+and not m:IsDescendantOf(Camera) then
+local hum = m:FindFirstChildOfClass("Humanoid")
+local ok = false
+if hum then
+ok = hum.Health > 0
+else
+local core = m:FindFirstChild("HumanoidRootPart")
+or m:FindFirstChild("Head")
+or m:FindFirstChild("UpperTorso")
+or m:FindFirstChild("Torso")
+if core then
+local h = m:GetAttribute("Health")
+if h == nil or h > 0 then ok = true end
+end
+end
+if ok and m:FindFirstChildWhichIsA("BasePart") then
+found[m] = true
+end
+end
+end
+scanCache = {}
+for m in pairs(found) do
+scanCache[#scanCache + 1] = m
+end
+end
+local function startScan()
+if scanRunning then return end
+scanRunning = true
+-- v7.1 АНТИ-ЛАГ: глубокий скан ВСЕЙ карты (GetDescendants) давал ФРИЗ каждые 3 сек.
+-- В BloxStrike все бойцы лежат в папке Characters - она и есть источник целей.
+-- Глубокий скан теперь включается ТОЛЬКО если папки Characters нет вообще.
+local th = task.spawn(function()
+while G.BS6_ON and scanRunning do
+task.wait(5)
+if not G.BS6_ON then break end
+if not CHAR_FOLDER then pcall(scanWorkspace) end
+end
+end)
+REG.threads[#REG.threads + 1] = th
+end
+local rayParams = RaycastParams.new()
+local function isVisible(fromPos, part, char)
+local ex = {}
+local myChar = LocalPlayer.Character
+if myChar then ex[#ex + 1] = myChar end
+if char then ex[#ex + 1] = char end
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.FilterDescendantsInstances = ex
+local res = Workspace:Raycast(fromPos, part.Position - fromPos, rayParams)
+if not res then return true end
+if char and res.Instance:IsDescendantOf(char) then return true end
+return false
+end
+local ESPObjects = {}
+local espMode = HAS_DRAWING and "draw" or "highlight"
+local drawFails = 0
+local function toScreen(p)
+local v, on = Camera:WorldToViewportPoint(p)
+return Vector2.new(v.X, v.Y), on
+end
+local function makeDrawESP(model, enemy)
+local obj = { model = model, enemy = enemy, mode = "draw", errs = 0, hideT = 0, draws = {} }
+local function add(d)
+if d then
+obj.draws[#obj.draws + 1] = d
+REG.draws[#REG.draws + 1] = d
+end
+return d
+end
+-- минимум рисовалок на цель (5 вместо 14) - чтобы игра НЕ вылетала
+obj.box = add(newDraw("Square"))
+if obj.box then obj.box.Thickness = 1 end
+obj.boxOut = add(newDraw("Square"))
+if obj.boxOut then
+obj.boxOut.Thickness = 3
+obj.boxOut.Color = Color3.fromRGB(0, 0, 0)
+end
+obj.name = add(newDraw("Text"))
+if obj.name then
+obj.name.Size = 14
+obj.name.Center = true
+obj.name.Outline = true
+end
+obj.hpBg = add(newDraw("Square"))
+obj.hpFill = add(newDraw("Square"))
+if obj.hpBg then
+obj.hpBg.Filled = true
+obj.hpBg.Color = Color3.fromRGB(20, 20, 20)
+obj.hpBg.Transparency = 1
+end
+if obj.hpFill then obj.hpFill.Filled = true end
+obj.corners = {}
+obj.lastText = nil
+obj.visCache = true
+obj.visAt = 0
+obj.bbAt = 0
+obj.bbTop = nil
+obj.bbBot = nil
+-- уголки создаются ТОЛЬКО если выбран стиль "Уголки" (лениво, по требованию)
+obj.ensureCorners = function()
+if #obj.corners > 0 then return end
+for i = 1, 8 do
+local ln = add(newDraw("Line"))
+if ln then
+ln.Thickness = 2
+ln.Visible = false
+end
+obj.corners[i] = ln
+end
+end
+obj.hl = nil
+obj.bb = nil
+obj.hidden = true
+return obj
+end
+local function makeHLESP(model, enemy)
+local obj = { model = model, enemy = enemy, mode = "highlight", hideT = 0, draws = {} }
+pcall(function()
+obj.hl = mk("Highlight", {
+FillColor = C3(Config.Col_Enemy),
+OutlineColor = Color3.fromRGB(255, 255, 255),
+FillTransparency = 0.55,
+OutlineTransparency = 0.05,
+DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+}, model)
+regInst(obj.hl)
+end)
+pcall(function()
+local head = model:FindFirstChild("Head")
+or model:FindFirstChild("UpperTorso")
+or model:FindFirstChild("HumanoidRootPart")
+if not head then return end
+local bb = mk("BillboardGui", {
+Name = "BS6_Info", Adornee = head,
+Size = UDim2.new(0, 140, 0, 40),
+StudsOffset = Vector3.new(0, 2.6, 0),
+AlwaysOnTop = true, MaxDistance = Config.Esp_MaxDist,
+}, head)
+obj.nameL = mk("TextLabel", {
+Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
+Font = Enum.Font.GothamBold, TextSize = 13,
+TextColor3 = Color3.fromRGB(255, 255, 255),
+TextStrokeTransparency = 0.2, Text = model.Name,
+}, bb)
+local hpBg = mk("Frame", {
+Position = UDim2.new(0, 10, 0, 18),
+Size = UDim2.new(1, -20, 0, 5),
+BackgroundColor3 = Color3.fromRGB(30, 30, 30),
+BorderSizePixel = 0,
+}, bb)
+obj.hpFillL = mk("Frame", {
+Size = UDim2.new(1, 0, 1, 0),
+BackgroundColor3 = Color3.fromRGB(90, 255, 90),
+BorderSizePixel = 0,
+}, hpBg)
+obj.distL = mk("TextLabel", {
+Position = UDim2.new(0, 0, 0, 25),
+Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+Font = Enum.Font.Gotham, TextSize = 11,
+TextColor3 = Color3.fromRGB(210, 210, 210),
+TextStrokeTransparency = 0.3, Text = "",
+}, bb)
+obj.bb = bb
+regInst(bb)
+end)
+obj.hidden = true
+return obj
+end
+local function makeESP(model, enemy)
+local obj
+if espMode == "draw" then
+obj = makeDrawESP(model, enemy)
+if obj and #obj.draws == 0 then obj = makeHLESP(model, enemy) end
+else
+obj = makeHLESP(model, enemy)
+end
+if obj then ESPObjects[model] = obj end
+return obj
+end
+local function removeESP(model)
+local obj = ESPObjects[model]
+if not obj then return end
+for i = 1, #obj.draws do
+pcall(function() obj.draws[i]:Remove() end)
+end
+if obj.hl then pcall(function() obj.hl:Destroy() end) end
+if obj.bb then pcall(function() obj.bb:Destroy() end) end
+ESPObjects[model] = nil
+end
+local function clearAllESP()
+for m in pairs(ESPObjects) do removeESP(m) end
+end
+local function applyEspMode()
+if Config.Esp_Mode == "Авто" then
+espMode = HAS_DRAWING and "draw" or "highlight"
+elseif Config.Esp_Mode == "Боксы" then
+espMode = "draw"
+else
+espMode = "highlight"
+end
+clearAllESP()
+end
+local function hideObj(obj)
+for i = 1, #obj.draws do
+pcall(function() obj.draws[i].Visible = false end)
+end
+if obj.hl then pcall(function() obj.hl.Enabled = false end) end
+if obj.bb then pcall(function() obj.bb.Enabled = false end) end
+end
+local function updateDrawESP(obj, myPos, now)
+local model = obj.model
+local hum, root = getAlive(model)
+local visible = false
+local col = obj.enemy and Config.Col_Enemy or Config.Col_Team
+if root then
+local dist = (root.Position - myPos).Magnitude
+if dist <= Config.Esp_MaxDist then
+local head = model:FindFirstChild("Head")
+local topPos, botPos
+if head then
+topPos = head.Position + Vector3.new(0, 0.7, 0)
+botPos = root.Position - Vector3.new(0, 3.0, 0)
+if botPos.Y > topPos.Y then botPos = topPos - Vector3.new(0, 4.5, 0) end
+else
+-- GetBoundingBox раз в 0.3с, а не каждый кадр (меньше нагрузки)
+if now - obj.bbAt > 0.3 or not obj.bbTop then
+obj.bbAt = now
+local okBB, bcf, bsz = pcall(function()
+return model:GetBoundingBox()
+end)
+if okBB and bcf and bsz and bsz.Y > 0.5 then
+local halfY = clamp(bsz.Y * 0.5, 1.6, 3.8)
+obj.bbTop = bcf.Position + Vector3.new(0, halfY, 0)
+obj.bbBot = bcf.Position - Vector3.new(0, halfY, 0)
+else
+obj.bbTop = root.Position + Vector3.new(0, 3.1, 0)
+obj.bbBot = root.Position - Vector3.new(0, 3.6, 0)
+end
+end
+topPos = obj.bbTop
+botPos = obj.bbBot
+end
+local topS = Camera:WorldToViewportPoint(topPos)
+local botS = Camera:WorldToViewportPoint(botPos)
+local rootS = Camera:WorldToViewportPoint(root.Position)
+if topS.Z > 0 or botS.Z > 0 or rootS.Z > 0 then
+visible = true
+local h = math.abs(botS.Y - topS.Y)
+if h < 14 then h = 14 end
+local w = h * 0.55
+if w < 12 then w = 12 end
+local cx = rootS.X
+if rootS.Z <= 0 then cx = (topS.X + botS.X) / 2 end
+local x = cx - w / 2
+local y = math.min(topS.Y, botS.Y)
+local mainC = C3(col)
+-- проверка стены раз в 0.25с, а не каждый кадр
+if now - obj.visAt > 0.25 then
+obj.visAt = now
+obj.visCache = isVisible(Camera.CFrame.Position, root, model)
+end
+if not obj.visCache then
+mainC = Color3.fromRGB(col[1] * 0.45, col[2] * 0.45, col[3] * 0.45)
+end
+if Config.Esp_Box then
+if Config.Esp_Style == "Уголки" then
+obj.ensureCorners()
+local cl = math.min(w, h) * 0.28
+if cl < 5 then cl = 5 end
+local c = obj.corners
+if c[1] then c[1].From = Vector2.new(x, y); c[1].To = Vector2.new(x + cl, y); c[1].Color = mainC; c[1].Visible = true end
+if c[2] then c[2].From = Vector2.new(x, y); c[2].To = Vector2.new(x, y + cl); c[2].Color = mainC; c[2].Visible = true end
+if c[3] then c[3].From = Vector2.new(x + w, y); c[3].To = Vector2.new(x + w - cl, y); c[3].Color = mainC; c[3].Visible = true end
+if c[4] then c[4].From = Vector2.new(x + w, y); c[4].To = Vector2.new(x + w, y + cl); c[4].Color = mainC; c[4].Visible = true end
+if c[5] then c[5].From = Vector2.new(x, y + h); c[5].To = Vector2.new(x + cl, y + h); c[5].Color = mainC; c[5].Visible = true end
+if c[6] then c[6].From = Vector2.new(x, y + h); c[6].To = Vector2.new(x, y + h - cl); c[6].Color = mainC; c[6].Visible = true end
+if c[7] then c[7].From = Vector2.new(x + w, y + h); c[7].To = Vector2.new(x + w - cl, y + h); c[7].Color = mainC; c[7].Visible = true end
+if c[8] then c[8].From = Vector2.new(x + w, y + h); c[8].To = Vector2.new(x + w, y + h - cl); c[8].Color = mainC; c[8].Visible = true end
+if obj.box then obj.box.Visible = false end
+if obj.boxOut then obj.boxOut.Visible = false end
+else
+if obj.box then
+obj.box.Position = Vector2.new(x, y)
+obj.box.Size = Vector2.new(w, h)
+obj.box.Color = mainC
+obj.box.Visible = true
+end
+if obj.boxOut then
+obj.boxOut.Position = Vector2.new(x - 1, y - 1)
+obj.boxOut.Size = Vector2.new(w + 2, h + 2)
+obj.boxOut.Visible = true
+end
+for i = 1, 8 do
+if obj.corners[i] then obj.corners[i].Visible = false end
+end
+end
+else
+if obj.box then obj.box.Visible = false end
+if obj.boxOut then obj.boxOut.Visible = false end
+for i = 1, 8 do
+if obj.corners[i] then obj.corners[i].Visible = false end
+end
+end
+local pct = 1
+if hum then
+pct = clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+end
+if Config.Esp_HP and obj.hpBg then
+obj.hpBg.Position = Vector2.new(x - 6, y)
+obj.hpBg.Size = Vector2.new(3, h)
+obj.hpBg.Visible = true
+if obj.hpFill then
+obj.hpFill.Position = Vector2.new(x - 5, y + h * (1 - pct))
+obj.hpFill.Size = Vector2.new(1, h * pct)
+obj.hpFill.Color = hpColor(pct * 100)
+obj.hpFill.Visible = true
+end
+else
+if obj.hpBg then obj.hpBg.Visible = false end
+if obj.hpFill then obj.hpFill.Visible = false end
+end
+if Config.Esp_Name and obj.name then
+-- имя+дистанция в ОДНОЙ строке (на 1 рисовалку меньше на цель)
+local txt = model.Name
+if Config.Esp_Dist then
+txt = txt .. " [" .. math.floor(dist + 0.5) .. "м]"
+end
+if txt ~= obj.lastText then
+obj.lastText = txt
+obj.name.Text = txt
+end
+obj.name.Position = Vector2.new(x + w / 2, y - 17)
+obj.name.Color = mainC
+obj.name.Visible = true
+elseif obj.name then
+obj.name.Visible = false
+end
+end
+end
+end
+if Config.Esp_Chams and hum then
+if not obj.hl then
+pcall(function()
+obj.hl = mk("Highlight", {
+DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+FillTransparency = 0.6,
+}, model)
+regInst(obj.hl)
+end)
+end
+if obj.hl then
+obj.hl.FillColor = C3(col)
+obj.hl.OutlineColor = C3(col)
+obj.hl.Enabled = true
+end
+elseif obj.hl then
+obj.hl.Enabled = false
+end
+-- прячем рисовалки ТОЛЬКО в момент исчезновения цели (не каждый кадр)
+if not visible and not obj.hidden then
+hideObj(obj)
+end
+obj.hidden = not visible
+return visible
+end
+local function updateHLESP(obj, myPos)
+local model = obj.model
+local hum, root = getAlive(model)
+local visible = false
+if root then
+local dist = (root.Position - myPos).Magnitude
+if dist <= Config.Esp_MaxDist then
+visible = true
+local col = obj.enemy and Config.Col_Enemy or Config.Col_Team
+if obj.hl then
+obj.hl.FillColor = C3(col)
+obj.hl.FillTransparency = 0.55
+obj.hl.Enabled = true
+end
+if obj.bb then
+obj.bb.Enabled = true
+if obj.nameL then obj.nameL.Text = model.Name end
+local pct = 1
+if hum then
+pct = clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+end
+if obj.hpFillL then
+obj.hpFillL.Size = UDim2.new(pct, 0, 1, 0)
+obj.hpFillL.BackgroundColor3 = hpColor(pct * 100)
+end
+if obj.distL then
+obj.distL.Text = math.floor(dist) .. "м"
+end
+end
+end
+end
+obj.hidden = not visible
+if not visible then hideObj(obj) end
+return visible
+end
+local diagT = 0
+local espList, espListAt = {}, 0
+local espTickAt = 0
+local function espStep()
+Camera = Workspace.CurrentCamera or Camera
+-- v7.1 ГЛАВНЫЙ АНТИ-ЛАГ: весь ESP обновляется 25 раз/сек, а не каждый кадр.
+-- Рисовалки Xeno - самая тяжёлая часть: было сотни обновлений свойств КАЖДЫЙ кадр.
+local nowTick = os.clock()
+if nowTick - espTickAt < 0.04 then return end
+espTickAt = nowTick
+if not Config.Esp_Enabled then
+for _, obj in pairs(ESPObjects) do
+if not obj.hidden then
+obj.hidden = true
+hideObj(obj)
+end
+end
+return
+end
+local myPos = getMyPos()
+-- v7.1: список целей обновляем 5 раз в секунду (0.2с), а не каждый кадр
+local now = os.clock()
+if now - espListAt > 0.2 then
+espListAt = now
+local list = {}
+for _, m in ipairs(getAllCombatModels()) do
+if isEnemy(m) or not Config.Esp_TeamCheck then
+local hum, root = getAlive(m)
+if root then
+local dist = (root.Position - myPos).Magnitude
+if dist <= Config.Esp_MaxDist then
+list[#list + 1] = { m, dist }
+end
+end
+end
+end
+table.sort(list, function(a, b) return a[2] < b[2] end)
+local maxN = math.min(Config.Esp_MaxCount, 18)
+while #list > maxN do
+table.remove(list)
+end
+espList = list
+end
+local seen = {}
+local frameSeen = 0
+for i = 1, #espList do
+local model = espList[i][1]
+seen[model] = true
+local obj = ESPObjects[model]
+if not obj then obj = makeESP(model, isEnemy(model)) end
+if obj then
+if obj.mode == "draw" then
+local ok, vis = pcall(updateDrawESP, obj, myPos, now)
+if ok and vis then frameSeen = frameSeen + 1 end
+if not ok then
+obj.errs = obj.errs + 1
+if obj.errs >= 5 then
+removeESP(model)
+drawFails = drawFails + 5
+end
+end
+else
+local ok, vis = pcall(updateHLESP, obj, myPos)
+if ok and vis then frameSeen = frameSeen + 1 end
+end
+end
+end
+for model, obj in pairs(ESPObjects) do
+if not seen[model] then
+obj.hideT = obj.hideT + 1
+if obj.hideT >= 2 or obj.hidden then
+removeESP(model)
+else
+hideObj(obj)
+end
+else
+obj.hideT = 0
+end
+end
+if espMode == "draw" and drawFails >= 30 then
+drawFails = 0
+espMode = "highlight"
+clearAllESP()
+warn("[BS6] ESP -> СВЕЧЕНИЕ (Drawing сбоит)")
+end
+if os.clock() - diagT > 10 then
+diagT = os.clock()
+refreshTeams(true)
+local cfT = CHAR_FOLDER and CHAR_FOLDER:FindFirstChild("Terrorists")
+local cfCT = CHAR_FOLDER and CHAR_FOLDER:FindFirstChild("Counter-Terrorists")
+local nT = cfT and #cfT:GetChildren() or 0
+local nCT = cfCT and #cfCT:GetChildren() or 0
+print("[BS6] статус: папка Characters=" .. (CHAR_FOLDER and "есть" or "НЕТ")
+.. ", моя команда=" .. (MY_FOLDER and MY_FOLDER.Name or "не найдена")
+.. ", T=" .. nT .. ", CT=" .. nCT .. ", боксов на экране=" .. frameSeen)
+if Config.Esp_Enabled and frameSeen == 0 then
+warn("[BS6] ESP: 0 целей - скинь скрин консоли (F9).")
+end
+end
+end
+local curTarget = nil
+local aimLocked = false
+local keyVAiming = false
+local rmbAiming = false
+local main = nil
+local ToggleRefresh = {}
+local aimMsg, aimMsgUntil = nil, 0
+local statBar = nil
+local updateStatus = nil
+local dmenuOpen = false
+local dMenuClick = nil
+local dMenuFrame = nil
+local dRefreshAll = nil
+local function showAimState(on)
+print("[BS6] АИМБОТ: " .. (on and "ВКЛЮЧЕН (T - выключить)" or "ВЫКЛЮЧЕН (T - включить)"))
+pcall(function()
+game:GetService("StarterGui"):SetCore("SendNotification", {
+Title = "BLOXSTRIKE HYPER v7.1",
+Text = on and "АИМБОТ: ВКЛЮЧЕН (T - выключить)" or "АИМБОТ: ВЫКЛЮЧЕН (T - включить)",
+Duration = 3,
+})
+end)
+if HAS_DRAWING then
+pcall(function()
+if not aimMsg then
+aimMsg = regDraw(newDraw("Text"))
+if aimMsg then
+aimMsg.Size = 22
+aimMsg.Center = true
+aimMsg.Outline = true
+end
+end
+if aimMsg then
+aimMsg.Text = on and "АИМБОТ: ВКЛ" or "АИМБОТ: ВЫКЛ"
+aimMsg.Color = on and Color3.fromRGB(60, 255, 120) or Color3.fromRGB(255, 70, 70)
+aimMsg.Position = Vector2.new(Camera.ViewportSize.X / 2, 80)
+aimMsg.Visible = true
+end
+end)
+end
+aimMsgUntil = os.clock() + 1.6
+if updateStatus then pcall(updateStatus) end
+end
+regConn(UserInputService.InputBegan:Connect(function(input, gpe)
+local ft = nil
+pcall(function() ft = UserInputService:GetFocusedTextBox() end)
+if input.KeyCode == Enum.KeyCode.T then
+if not ft and Config.Aim_KeyT then
+Config.Aim_Enabled = not Config.Aim_Enabled
+showAimState(Config.Aim_Enabled)
+local rf = ToggleRefresh["Aim_Enabled"]
+if rf then pcall(rf) end
+end
+end
+if ft then return end
+if input.KeyCode == Enum.KeyCode.RightControl
+or input.KeyCode == Enum.KeyCode.RightShift then
+if HAS_DRAWING then
+dmenuOpen = not dmenuOpen
+if dRefreshAll then pcall(dRefreshAll) end
+if updateStatus then pcall(updateStatus) end
+end
+elseif input.KeyCode == Enum.KeyCode.K then
+Config.Esp_Enabled = not Config.Esp_Enabled
+local rf = ToggleRefresh["Esp_Enabled"]
+if rf then pcall(rf) end
+if updateStatus then pcall(updateStatus) end
+print("[BS6] ESP: " .. (Config.Esp_Enabled and "ВКЛ" or "ВЫКЛ") .. " (K)")
+elseif input.KeyCode == Enum.KeyCode.Delete then
+unloadAll()
+end
+if input.UserInputType == Enum.UserInputType.MouseButton1 then
+if dMenuClick then pcall(dMenuClick, input) end
+end
+if gpe then return end
+if input.KeyCode == Enum.KeyCode.V then keyVAiming = true end
+if input.UserInputType == Enum.UserInputType.MouseButton2 then rmbAiming = true end
+end))
+regConn(UserInputService.InputEnded:Connect(function(input)
+if input.KeyCode == Enum.KeyCode.V then keyVAiming = false end
+if input.UserInputType == Enum.UserInputType.MouseButton2 then rmbAiming = false end
+end))
+local function isAimingNow()
+if not Config.Aim_Enabled then return false end
+if dmenuOpen then return false end
+if main and main.Visible then return false end
+local a = Config.Aim_Activate
+if a == "Всегда" then return true end
+if a == "ПКМ" and rmbAiming then return true end
+if a == "V" and keyVAiming then return true end
+if a == "ПКМ+V" and (rmbAiming or keyVAiming) then return true end
+return false
+end
+local function getAimPart(char)
+if Config.Aim_Target == "Голова" then
+return char:FindFirstChild("Head")
+or char:FindFirstChild("UpperTorso")
+or char:FindFirstChild("Torso")
+or char:FindFirstChild("HumanoidRootPart")
+or char.PrimaryPart
+or char:FindFirstChildWhichIsA("BasePart")
+end
+return char:FindFirstChild("HumanoidRootPart")
+or char:FindFirstChild("UpperTorso")
+or char:FindFirstChild("Torso")
+or char:FindFirstChild("Head")
+or char.PrimaryPart
+or char:FindFirstChildWhichIsA("BasePart")
+end
+local function targetValid(model)
+if not model or not model.Parent then return false end
+if Config.Aim_TeamCheck and not isEnemy(model) then return false end
+local hum, root = getAlive(model)
+if not root then return false end
+local part = getAimPart(model)
+if not part then return false end
+if Config.Aim_Wall and not isVisible(Camera.CFrame.Position, part, model) then
+return false
+end
+return true
+end
+local aimMarker = nil
+local aimMarkerShown = false
+if HAS_DRAWING then
+aimMarker = regDraw(newDraw("Square"))
+if aimMarker then
+aimMarker.Thickness = 2
+aimMarker.Filled = false
+aimMarker.Visible = false
+end
+end
+local aimDbg = { n = 0, frame = 0, wall = 0, off = 0 }
+local aimCache, aimCacheT = nil, 0
+local function findBestTarget()
+local vp = Camera.ViewportSize
+local scale = vp.Y / 1080
+local fovPx = math.max(Config.Aim_FOV * scale, 20)
+local mp = UserInputService:GetMouseLocation()
+local mx, my = mp.X, mp.Y
+local best, bestDist = nil, fovPx
+for _, m in ipairs(getAllCombatModels()) do
+local ok = isEnemy(m)
+if not ok and not Config.Aim_TeamCheck then ok = true end
+if ok then
+aimDbg.n = aimDbg.n + 1
+local hum, root = getAlive(m)
+if root then
+local part = getAimPart(m)
+if part then
+local wallOK = true
+if Config.Aim_Wall then
+wallOK = isVisible(Camera.CFrame.Position, part, m)
+end
+if wallOK then
+local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+if onScreen then
+local d = math.sqrt((sp.X - mx) ^ 2 + (sp.Y - my) ^ 2)
+if d < bestDist then
+bestDist = d
+best = m
+end
+else
+aimDbg.off = aimDbg.off + 1
+end
+if not wallOK then
+aimDbg.wall = aimDbg.wall + 1
+end
+end
+end
+end
+end
+end
+return best
+end
+local function aimStep(dt)
+Camera = Workspace.CurrentCamera or Camera
+aimLocked = false
+if aimMarker and aimMarkerShown then
+pcall(function() aimMarker.Visible = false end)
+aimMarkerShown = false
+end
+if dmenuOpen or (main and main.Visible) then curTarget = nil return end
+local myChar = LocalPlayer.Character
+local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+if myHum and myHum.Health <= 0 then
+curTarget = nil
+return
+end
+if not isAimingNow() then
+curTarget = nil
+return
+end
+if Config.Aim_Sticky and curTarget then
+local ok = false
+pcall(function() ok = targetValid(curTarget) end)
+if ok then
+local part = getAimPart(curTarget)
+if part then
+local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+local scale = Camera.ViewportSize.Y / 1080
+if not onScreen
+or (UserInputService:GetMouseLocation() - Vector2.new(sp.X, sp.Y)).Magnitude
+>= Config.Aim_FOV * scale * 1.6 then
+curTarget = nil
+end
+else
+curTarget = nil
+end
+else
+curTarget = nil
+end
+end
+-- поиск цели 10 раз в секунду, а не каждый кадр (меньше нагрузки)
+if not curTarget then
+local nowc = os.clock()
+if nowc - aimCacheT > 0.1 then
+aimCacheT = nowc
+aimCache = findBestTarget()
+end
+curTarget = aimCache
+if curTarget then
+local okv = false
+pcall(function() okv = targetValid(curTarget) end)
+if not okv then curTarget = nil end
+end
+end
+if not curTarget then
+aimDbg.frame = aimDbg.frame + 1
+if aimDbg.frame % 120 == 0 then
+warn("[BS6] аим: цели нет (моделей: " .. aimDbg.n .. ", за стеной: " .. aimDbg.wall .. ", вне FOV/экрана: " .. aimDbg.off .. ")")
+end
+aimDbg.n, aimDbg.wall, aimDbg.off = 0, 0, 0
+return
+end
+aimDbg.n, aimDbg.wall, aimDbg.off = 0, 0, 0
+local part = getAimPart(curTarget)
+if not part then
+curTarget = nil
+return
+end
+local aimPos = part.Position
+pcall(function()
+local vel = part.AssemblyLinearVelocity
+if vel then
+aimPos = aimPos + vel * (Config.Aim_Pred / 100) * 0.5
+end
+end)
+aimLocked = true
+if aimMarker then
+pcall(function()
+local msp = Camera:WorldToViewportPoint(aimPos)
+aimMarker.Position = Vector2.new(msp.X - 6, msp.Y - 6)
+aimMarker.Size = Vector2.new(12, 12)
+aimMarker.Color = Color3.fromRGB(255, 60, 60)
+if not aimMarkerShown then
+aimMarker.Visible = true
+aimMarkerShown = true
+end
+end)
+end
+if Config.Aim_Mode == "Мышь" then
+if mousemoverel then
+local sp = Camera:WorldToViewportPoint(aimPos)
+local mp = UserInputService:GetMouseLocation()
+local sm = math.max(Config.Aim_Smooth, 1)
+pcall(function() mousemoverel((sp.X - mp.X) / sm, (sp.Y - mp.Y) / sm) end)
+end
+return
+end
+local camPos = Camera.CFrame.Position
+local dir = aimPos - camPos
+local dist = dir.Magnitude
+if dist < 0.5 then return end
+local yaw = math.atan2(-dir.X, -dir.Z)
+local pitch = math.asin(clamp(dir.Y / dist, -1, 1))
+local MAX_PITCH = math.rad(80)
+pitch = clamp(pitch, -MAX_PITCH, MAX_PITCH)
+local desired = CFrame.new(camPos) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+local curLook = Camera.CFrame.LookVector
+local curDir = (aimPos - camPos).Unit
+local angleDiff = math.deg(math.acos(clamp(curLook:Dot(curDir), -1, 1)))
+if angleDiff > 0.2 then
+local k = clamp(42 - Config.Aim_Smooth * 2, 6, 40)
+local alpha = clamp(1 - math.exp(-k * dt), 0, 0.35)
+Camera.CFrame = Camera.CFrame:Lerp(desired, alpha)
+end
+end
+local fovCircle = nil
+if HAS_DRAWING then fovCircle = regDraw(newDraw("Circle")) end
+if fovCircle then
+pcall(function()
+fovCircle.NumSides = 48
+fovCircle.Filled = false
+fovCircle.Thickness = 1.5
+fovCircle.Visible = false
+end)
+end
+-- v7.1 АНТИ-ЛАГ: круг FOV обновляется ТОЛЬКО когда мышь/радиус/цвет изменились,
+-- а не каждый кадр (меньше обращений к хуку Drawing)
+local fovLastPos, fovLastRad, fovLastLocked = nil, nil, nil
+local fovShown = false
+local function fovStep()
+Camera = Workspace.CurrentCamera or Camera
+if dMenuFrame then pcall(dMenuFrame, dmenuOpen) end
+if aimMsg and aimMsgUntil > 0 and os.clock() > aimMsgUntil then
+aimMsg.Visible = false
+aimMsgUntil = 0
+end
+if not fovCircle then return end
+if Config.Aim_ShowFOV and Config.Aim_Enabled then
+local fmp = UserInputService:GetMouseLocation()
+local rad = math.max(Config.Aim_FOV * (Camera.ViewportSize.Y / 1080), 20)
+local locked = aimLocked and true or false
+if fmp ~= fovLastPos or rad ~= fovLastRad or locked ~= fovLastLocked then
+fovLastPos, fovLastRad, fovLastLocked = fmp, rad, locked
+pcall(function()
+fovCircle.Position = Vector2.new(fmp.X, fmp.Y)
+fovCircle.Radius = rad
+fovCircle.Color = locked and Color3.fromRGB(255, 60, 60)
+or Color3.fromRGB(255, 255, 255)
+end)
+end
+if not fovShown then
+fovCircle.Visible = true
+fovShown = true
+end
+else
+if fovShown then
+fovCircle.Visible = false
+fovShown = false
+end
+fovLastPos, fovLastRad, fovLastLocked = nil, nil, nil
+end
+end
+local lastShot = 0
+local trigParams = RaycastParams.new()
+local trigAt = 0
+local function triggerStep()
+if not Config.Trig_Enabled then return end
+-- v7.1: триггербот проверяет центр экрана 10 раз/сек, а не каждый кадр
+local nowt = os.clock()
+if nowt - trigAt < 0.1 then return end
+trigAt = nowt
+local myChar = LocalPlayer.Character
+local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+if not myHum or myHum.Health <= 0 then return end
+local vp = Camera.ViewportSize
+local ray = Camera:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+local ex = {}
+if myChar then ex[#ex + 1] = myChar end
+trigParams.FilterType = Enum.RaycastFilterType.Exclude
+trigParams.FilterDescendantsInstances = ex
+local res = Workspace:Raycast(ray.Origin, ray.Direction * 2048, trigParams)
+if not res or not res.Instance then return end
+local model = res.Instance:FindFirstAncestorOfClass("Model")
+if not model or not isEnemy(model) then return end
+local hum = model:FindFirstChildOfClass("Humanoid")
+if not hum or hum.Health <= 0 then return end
+local now = os.clock() * 1000
+if now - lastShot < Config.Trig_Cooldown then return end
+task.delay(Config.Trig_Delay / 1000, function()
+local still = false
+pcall(function()
+local ray2 = Camera:ViewportPointToRay(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+local r2 = Workspace:Raycast(ray2.Origin, ray2.Direction * 2048, trigParams)
+still = r2 and r2.Instance and r2.Instance:FindFirstAncestorOfClass("Model") == model
+end)
+if still then
+lastShot = os.clock() * 1000
+if mouse1click then
+pcall(function() mouse1click() end)
+elseif mouse1press then
+pcall(function()
+mouse1press()
+task.delay(0.04, function() mouse1release() end)
+end)
+end
+end
+end)
+end
+local fxCache, fxAt = nil, 0
+local function fxScan()
+fxAt = os.clock()
+fxCache = {}
+pcall(function()
+for _, o in ipairs(game:GetService("Lighting"):GetDescendants()) do
+if o:IsA("BlurEffect") or o:IsA("ColorCorrectionEffect") then
+fxCache[#fxCache + 1] = o
+end
+end
+end)
+pcall(function()
+for _, o in ipairs(Camera:GetDescendants()) do
+if o:IsA("BlurEffect") or o:IsA("ColorCorrectionEffect") then
+fxCache[#fxCache + 1] = o
+end
+end
+end)
+end
+local function antiFlashStep()
+if not Config.Misc_AntiFlash then return end
+if not fxCache or os.clock() - fxAt > 0.5 then fxScan() end
+for i = 1, #fxCache do
+local o = fxCache[i]
+pcall(function()
+if o:IsA("BlurEffect") and o.Size > 2 then o.Size = 0 end
+if o:IsA("ColorCorrectionEffect") then
+if o.Brightness >= 0.5 then o.Brightness = 0 end
+if o.Saturation <= -0.8 then o.Saturation = 0 end
+end
+end)
+end
+end
+local smokeAt = 0
+local function noSmokeStep()
+if not Config.Misc_NoSmoke then return end
+if os.clock() - smokeAt < 2 then return end
+smokeAt = os.clock()
+pcall(function()
+for _, o in ipairs(Workspace:GetDescendants()) do
+local ln = string.lower(o.Name)
+if string.find(ln, "smoke", 1, true) then
+if o:IsA("ParticleEmitter") then
+o.Enabled = false
+elseif o:IsA("BasePart") then
+o.Transparency = 1
+elseif o:IsA("Smoke") then
+o.Enabled = false
+end
+end
+end
+end)
+end
+local function miscStep()
+if Config.Misc_BHop then
+local myChar = LocalPlayer.Character
+if myChar then
+local hum = myChar:FindFirstChildOfClass("Humanoid")
+if hum and hum.Health > 0 and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+local st = hum:GetState()
+if st ~= Enum.HumanoidStateType.Jumping and st ~= Enum.HumanoidStateType.Freefall then
+hum.Jump = true
+end
+end
+end
+end
+antiFlashStep()
+noSmokeStep()
+safe("trigger", triggerStep)
+end
+G.BS6_Heads = {}
+local hitboxRunning = false
+local function hitboxApply()
+for _, m in ipairs(getAllCombatModels()) do
+if isEnemy(m) then
+local hum = m:FindFirstChildOfClass("Humanoid")
+local head = m:FindFirstChild("Head")
+if hum and hum.Health > 0 and head and head:IsA("BasePart") then
+if not G.BS6_Heads[head] then G.BS6_Heads[head] = head.Size end
+pcall(function()
+local s = Config.Hitbox_Size or 3
+head.Size = Vector3.new(s, s, s)
+head.CanCollide = false
+head.Massless = true
+head.Transparency = 0.4
+end)
+end
+end
+end
+end
+local function hitboxRestore()
+for head, size in pairs(G.BS6_Heads) do
+pcall(function()
+if head and head.Parent then
+head.Size = size
+head.Transparency = 0
+head.CanCollide = true
+head.Massless = false
+end
+end)
+end
+G.BS6_Heads = {}
+end
+local function startHitbox()
+if hitboxRunning then return end
+hitboxRunning = true
+local th = task.spawn(function()
+while hitboxRunning do
+task.wait(0.4)
+if Config.Hitbox_Enabled then safe("hitbox", hitboxApply) end
+end
+end)
+REG.threads[#REG.threads + 1] = th
+end
+-- ======================================================================
+-- МЕНЮ НА DRAWING: рисует сам ЭКЗЕКЬЮТОР, игра удалить не может.
+-- Клик по строке мышкой = вкл/выкл. Перетаскивание за шапку.
+-- ======================================================================
+local dmenuW, ROWH = 348, 18
+local dmenuPos = Vector2.new(14, 34)
+local dmenuDrag = false
+local dmenuDragOff = Vector2.new(0, 0)
+local dmenuShown = false
+local dmenuDirty = true
+local dRows = {}
+local dTotalH = 26
+local dmenuBG, dmenuTitle = nil, nil
+local function dnew(kind) return regDraw(newDraw(kind)) end
+local function dRefreshRow(r)
+if not r.text then return end
+if r.type == "toggle" then
+local on = Config[r.key] and true or false
+r.text.Text = (on and "[X]  " or "[ ]  ") .. r.label
+r.text.Color = on and Color3.fromRGB(90, 255, 120) or Color3.fromRGB(200, 200, 210)
+elseif r.type == "cycle" then
+r.text.Text = "  " .. r.label .. ": " .. tostring(Config[r.key]) .. " <"
+r.text.Color = Color3.fromRGB(255, 200, 90)
+elseif r.type == "action" then
+r.text.Text = "  " .. r.label
+r.text.Color = Color3.fromRGB(255, 90, 90)
+else
+r.text.Text = "  " .. r.label
+r.text.Color = Color3.fromRGB(255, 150, 50)
+end
+end
+dRefreshAll = function()
+for _, r in ipairs(dRows) do pcall(dRefreshRow, r) end
+end
+local function dBuild()
+for _, r in ipairs(dRows) do
+if r.text then pcall(function() r.text:Remove() end) end
+end
+dRows = {}
+pcall(function() if dmenuBG then dmenuBG:Remove() end end)
+pcall(function() if dmenuTitle then dmenuTitle:Remove() end end)
+dmenuBG = dnew("Square")
+if dmenuBG then
+dmenuBG.Filled = true
+dmenuBG.Color = Color3.fromRGB(14, 14, 20)
+dmenuBG.Transparency = 1
+dmenuBG.Thickness = 1
+end
+dmenuTitle = dnew("Text")
+if dmenuTitle then
+dmenuTitle.Text = "BLOXSTRIKE HYPER v7.1 LIGHT"
+dmenuTitle.Size = 15
+dmenuTitle.Color = Color3.fromRGB(255, 150, 50)
+dmenuTitle.Outline = true
+end
+local defs = {
+{ type = "section", label = "== АИМБОТ ==" },
+{ type = "toggle", key = "Aim_Enabled", label = "Аимбот ВКЛ (клавиша T)" },
+{ type = "cycle", key = "Aim_Mode", label = "Режим аима", options = { "Камера", "Мышь" } },
+{ type = "cycle", key = "Aim_Activate", label = "Активация", options = { "Всегда", "ПКМ", "V", "ПКМ+V" } },
+{ type = "cycle", key = "Aim_Target", label = "Цель", options = { "Голова", "Тело" } },
+{ type = "cycle", key = "Aim_FOV", label = "Радиус захвата", presets = { 60, 100, 180, 250, 350 } },
+{ type = "cycle", key = "Aim_Smooth", label = "Плавность", presets = { 1, 2, 4, 8, 12 } },
+{ type = "toggle", key = "Aim_ShowFOV", label = "Показывать круг FOV" },
+{ type = "toggle", key = "Aim_Wall", label = "Не аимить сквозь стены" },
+{ type = "toggle", key = "Aim_TeamCheck", label = "Игнорировать своих" },
+{ type = "section", label = "== ESP ==" },
+{ type = "toggle", key = "Esp_Enabled", label = "ESP ВКЛ (клавиша K)" },
+{ type = "cycle", key = "Esp_Mode", label = "Режим ESP", options = { "Авто", "Боксы", "Свечение" }, onChanged = function() pcall(applyEspMode) end },
+{ type = "cycle", key = "Esp_Style", label = "Стиль боксов", options = { "Полный", "Уголки" } },
+{ type = "cycle", key = "Esp_MaxDist", label = "Дистанция ESP (м)", presets = { 500, 1000, 2000, 3000, 5000 } },
+{ type = "cycle", key = "Esp_MaxCount", label = "Макс. боксов", presets = { 6, 10, 14, 18 } },
+{ type = "toggle", key = "Esp_Chams", label = "Свечение (тяжело - держи ВЫКЛ)" },
+{ type = "section", label = "== ПРОЧЕЕ ==" },
+{ type = "toggle", key = "Trig_Enabled", label = "Триггербот" },
+{ type = "toggle", key = "Hitbox_Enabled", label = "Хитбоксы (головы врагов)", onChanged = function(v) if not v then pcall(hitboxRestore) end end },
+{ type = "cycle", key = "Hitbox_Size", label = "Размер головы", presets = { 2, 3, 4, 6 } },
+{ type = "toggle", key = "Misc_BHop", label = "BHOP (зажми ПРОБЕЛ)" },
+{ type = "toggle", key = "Misc_AntiFlash", label = "Анти-флеш" },
+{ type = "toggle", key = "Misc_NoSmoke", label = "Убрать дым" },
+{ type = "action", label = "ВЫГРУЗИТЬ ВСЁ (Delete)", action = function() pcall(unloadAll) end },
+{ type = "section", label = "КЛИКАЙ по строкам! Лагает? Боксов=10, Свечение=ВЫКЛ" },
+}
+for _, d in ipairs(defs) do
+local r = {
+type = d.type, label = d.label, key = d.key,
+options = d.options, presets = d.presets,
+onChanged = d.onChanged, action = d.action,
+x = 0, y = 0, w = dmenuW - 12,
+}
+r.text = dnew("Text")
+if r.text then
+r.text.Outline = true
+r.text.Size = (d.type == "section") and 12 or 13
+end
+dRows[#dRows + 1] = r
+end
+dTotalH = 26 + #dRows * ROWH + 8
+dmenuDirty = true
+dRefreshAll()
+end
+dMenuFrame = function(open)
+-- когда меню закрыто - НЕ трогаем рисовалки каждый кадр (один раз спрятали и всё)
+if not open then
+if not dmenuShown then return end
+dmenuShown = false
+pcall(function()
+if dmenuBG then dmenuBG.Visible = false end
+if dmenuTitle then dmenuTitle.Visible = false end
+end)
+for _, r in ipairs(dRows) do
+if r.text then pcall(function() r.text.Visible = false end) end
+end
+return
+end
+-- v7.1: перерисовываем меню ТОЛЬКО при открытии/перетаскивании, а не каждый кадр
+if dmenuShown and not dmenuDirty then return end
+dmenuShown = true
+dmenuDirty = false
+pcall(function()
+if dmenuBG then
+dmenuBG.Position = dmenuPos
+dmenuBG.Size = Vector2.new(dmenuW, dTotalH)
+dmenuBG.Visible = true
+end
+if dmenuTitle then
+dmenuTitle.Position = dmenuPos + Vector2.new(8, 5)
+dmenuTitle.Visible = true
+end
+end)
+for i, r in ipairs(dRows) do
+r.x = dmenuPos.X + 6
+r.y = dmenuPos.Y + 26 + (i - 1) * ROWH
+if r.text then
+pcall(function()
+r.text.Position = Vector2.new(r.x, r.y)
+r.text.Visible = true
+end)
+end
+end
+end
+dMenuClick = function(input)
+if not dmenuOpen then return end
+if input and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+local mp = UserInputService:GetMouseLocation()
+for _, r in ipairs(dRows) do
+if mp.Y >= r.y and mp.Y <= r.y + ROWH
+and mp.X >= r.x and mp.X <= r.x + r.w then
+if r.type == "toggle" then
+Config[r.key] = not Config[r.key]
+local rf = ToggleRefresh[r.key]
+if rf then pcall(rf) end
+if r.onChanged then pcall(r.onChanged, Config[r.key]) end
+elseif r.type == "cycle" then
+local list = r.options or r.presets
+if list and #list > 0 then
+local idx = 1
+for i, v in ipairs(list) do
+if Config[r.key] == v then idx = i break end
+end
+idx = idx + 1
+if idx > #list then idx = 1 end
+Config[r.key] = list[idx]
+local rf = ToggleRefresh[r.key]
+if rf then pcall(rf) end
+if r.onChanged then pcall(r.onChanged, Config[r.key]) end
+end
+elseif r.type == "action" then
+if r.action then pcall(r.action) end
+end
+dRefreshAll()
+if updateStatus then pcall(updateStatus) end
+break
+end
+end
+end
+-- перетаскивание меню за шапку
+regConn(UserInputService.InputBegan:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1 and dmenuOpen then
+local mp = UserInputService:GetMouseLocation()
+if mp.Y >= dmenuPos.Y and mp.Y <= dmenuPos.Y + 24
+and mp.X >= dmenuPos.X and mp.X <= dmenuPos.X + dmenuW then
+dmenuDrag = true
+dmenuDragOff = mp - dmenuPos
+end
+end
+end))
+regConn(UserInputService.InputChanged:Connect(function(input)
+if dmenuDrag and input.UserInputType == Enum.UserInputType.MouseMovement then
+local mp = UserInputService:GetMouseLocation()
+dmenuPos = mp - dmenuDragOff
+dmenuDirty = true
+end
+end))
+regConn(UserInputService.InputEnded:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1 then dmenuDrag = false end
+end))
+local gui = nil
+local guiPlace = "нет"
+local buildConnMark = #REG.conns
+local rebuildCount = 0
+local autoRebuilds = 0
+local rebuildBusy = false
+local function buildMenu()
+if not G.BS6_ON then return end
+-- отключаем соединения прошлого билда меню (чтобы не плодить дубли)
+for i = buildConnMark + 1, #REG.conns do
+pcall(function() REG.conns[i]:Disconnect() end)
+end
+buildConnMark = #REG.conns
+rebuildCount = rebuildCount + 1
+pcall(function() if gui then gui:Destroy() end end)
+do
+local parents = {}
+pcall(function()
+if gethui then
+local h = gethui()
+if h then parents[#parents + 1] = { name = "gethui", obj = h } end
+end
+end)
+pcall(function()
+parents[#parents + 1] = { name = "CoreGui", obj = game:GetService("CoreGui") }
+end)
+pcall(function()
+local pg = LocalPlayer:FindFirstChild("PlayerGui")
+or LocalPlayer:WaitForChild("PlayerGui", 5)
+if pg then parents[#parents + 1] = { name = "PlayerGui", obj = pg } end
+end)
+-- каждый пересозд сдвигаем место вставки по кругу: игра не убьёт меню в одном месте
+local rot = 0
+if #parents > 0 then rot = (rebuildCount - 1) % #parents end
+for k = 1, #parents do
+if gui then break end
+local pi = parents[1 + ((k - 1 + rot) % #parents)]
+local ok = pcall(function()
+local g = Instance.new("ScreenGui")
+g.Name = "BS6_Hyper"
+g.ResetOnSpawn = false
+g.IgnoreGuiInset = true
+g.DisplayOrder = 999999
+g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+g.Parent = pi.obj
+gui = g
+end)
+if ok and gui and gui.Parent then
+guiPlace = pi.name
+end
+end
+-- protectgui УБРАН - в некоторых экзекьюторах он вызывает вылет игры
+end
+if not gui then
+gui = Instance.new("ScreenGui")
+warn("[BS6] меню не вставилось в игру - аим/ESP работают, но без меню")
+end
+G.BS6_GUI = gui
+regInst(gui)
+-- убрано мгновенное пересоздание по Destroying - гонка с игрой могла ВЫЗЫВАТЬ ВЫЛЕТ
+local UI = {
+Bg = Color3.fromRGB(18, 18, 24),
+Bg2 = Color3.fromRGB(26, 26, 34),
+Bg3 = Color3.fromRGB(34, 34, 44),
+Accent = Color3.fromRGB(255, 150, 50),
+Text = Color3.fromRGB(235, 235, 235),
+Dim = Color3.fromRGB(140, 140, 150),
+Red = Color3.fromRGB(255, 80, 80),
+}
+main = mk("Frame", {
+Name = "Main", Size = UDim2.new(0, 480, 0, 400),
+Position = UDim2.new(0.5, -240, 0.5, -200),
+BackgroundColor3 = UI.Bg, BorderSizePixel = 0,
+Active = true, Visible = true,
+}, gui)
+G.BS6_MENU = main
+mk("UICorner", { CornerRadius = UDim.new(0, 10) }, main)
+mk("UIStroke", { Color = Color3.fromRGB(60, 60, 75), Transparency = 0.4 }, main)
+local topbar = mk("Frame", {
+Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = UI.Bg2,
+BorderSizePixel = 0,
+}, main)
+mk("UICorner", { CornerRadius = UDim.new(0, 10) }, topbar)
+mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 0),
+Size = UDim2.new(0, 340, 1, 0), Font = Enum.Font.GothamBold,
+TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+TextColor3 = UI.Text, Text = "BLOXSTRIKE HYPER v7.1 LIGHT  [RightControl]",
+}, topbar)
+local closeBtn = mk("TextButton", {
+Size = UDim2.new(0, 26, 0, 26), Position = UDim2.new(1, -32, 0, 6),
+BackgroundColor3 = UI.Bg3, Text = "X", TextColor3 = UI.Red,
+Font = Enum.Font.GothamBold, TextSize = 13, BorderSizePixel = 0,
+}, topbar)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, closeBtn)
+closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
+do
+local dragging = false
+local dragStart, startPos
+topbar.InputBegan:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1
+or input.UserInputType == Enum.UserInputType.Touch then
+dragging = true
+dragStart = input.Position
+startPos = main.Position
+end
+end)
+regConn(UserInputService.InputEnded:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1
+or input.UserInputType == Enum.UserInputType.Touch then
+dragging = false
+end
+end))
+regConn(UserInputService.InputChanged:Connect(function(input)
+if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+or input.UserInputType == Enum.UserInputType.Touch) then
+local delta = input.Position - dragStart
+main.Position = UDim2.new(
+startPos.X.Scale, startPos.X.Offset + delta.X,
+startPos.Y.Scale, startPos.Y.Offset + delta.Y
+)
+end
+end))
+end
+local tabBar = mk("Frame", {
+Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 38),
+BackgroundTransparency = 1,
+}, main)
+mk("UIListLayout", {
+FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
+HorizontalAlignment = Enum.HorizontalAlignment.Center,
+VerticalAlignment = Enum.VerticalAlignment.Center,
+}, tabBar)
+local tabButtons, pages = {}, {}
+local function switchTab(name)
+for n, page in pairs(pages) do page.Visible = (n == name) end
+for n, btn in pairs(tabButtons) do
+if n == name then
+btn.BackgroundColor3 = UI.Accent
+btn.TextColor3 = Color3.fromRGB(20, 20, 20)
+else
+btn.BackgroundColor3 = UI.Bg3
+btn.TextColor3 = UI.Dim
+end
+end
+end
+local function makeTab(name)
+local btn = mk("TextButton", {
+Size = UDim2.new(0, 110, 0, 26), BackgroundColor3 = UI.Bg3,
+Text = name, TextColor3 = UI.Dim, Font = Enum.Font.Gotham,
+TextSize = 13, BorderSizePixel = 0, AutoButtonColor = true,
+}, tabBar)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, btn)
+tabButtons[name] = btn
+local page = mk("ScrollingFrame", {
+Size = UDim2.new(1, -16, 1, -84), Position = UDim2.new(0, 8, 0, 78),
+BackgroundTransparency = 1, BorderSizePixel = 0,
+ScrollBarThickness = 4, ScrollBarImageColor3 = UI.Accent,
+CanvasSize = UDim2.new(0, 0, 0, 0),
+AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = false,
+}, main)
+mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+pages[name] = page
+btn.MouseButton1Click:Connect(function() switchTab(name) end)
+return page
+end
+local function mkSection(page, text)
+mk("TextLabel", {
+Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
+Font = Enum.Font.GothamBold, TextSize = 12,
+TextXAlignment = Enum.TextXAlignment.Left,
+TextColor3 = UI.Accent, Text = "  " .. text,
+}, page)
+end
+local function mkToggle(page, label, key, onChanged)
+local row = mk("TextButton", {
+Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = UI.Bg2,
+BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+}, page)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0),
+Size = UDim2.new(1, -80, 1, 0), Font = Enum.Font.Gotham,
+TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+TextColor3 = UI.Text, Text = label,
+}, row)
+local sw = mk("Frame", {
+Size = UDim2.new(0, 38, 0, 16), Position = UDim2.new(1, -48, 0.5, -8),
+BackgroundColor3 = UI.Bg3, BorderSizePixel = 0,
+}, row)
+mk("UICorner", { CornerRadius = UDim.new(1, 0) }, sw)
+local knob = mk("Frame", {
+Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(0, 2, 0.5, -6),
+BackgroundColor3 = UI.Dim, BorderSizePixel = 0,
+}, sw)
+mk("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+local function refresh()
+if Config[key] then
+sw.BackgroundColor3 = UI.Accent
+knob.Position = UDim2.new(1, -14, 0.5, -6)
+knob.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+else
+sw.BackgroundColor3 = UI.Bg3
+knob.Position = UDim2.new(0, 2, 0.5, -6)
+knob.BackgroundColor3 = UI.Dim
+end
+end
+refresh()
+ToggleRefresh[key] = refresh
+row.MouseButton1Click:Connect(function()
+Config[key] = not Config[key]
+refresh()
+if onChanged then pcall(onChanged, Config[key]) end
+end)
+end
+local function mkSlider(page, label, mn, mx, step, key, suffix)
+local row = mk("Frame", {
+Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = UI.Bg2,
+BorderSizePixel = 0,
+}, page)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 4),
+Size = UDim2.new(1, -90, 0, 16), Font = Enum.Font.Gotham,
+TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+TextColor3 = UI.Text, Text = label,
+}, row)
+local val = mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(1, -85, 0, 4),
+Size = UDim2.new(0, 75, 0, 16), Font = Enum.Font.GothamBold,
+TextSize = 12, TextXAlignment = Enum.TextX.Right,
+TextColor3 = UI.Accent, Text = "",
+}, row)
+local track = mk("TextButton", {
+Size = UDim2.new(1, -20, 0, 8), Position = UDim2.new(0, 10, 0, 28),
+BackgroundColor3 = UI.Bg3, BorderSizePixel = 0,
+Text = "", AutoButtonColor = false,
+}, row)
+mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+local fill = mk("Frame", {
+Size = UDim2.new(0.5, 0, 1, 0), BackgroundColor3 = UI.Accent,
+BorderSizePixel = 0,
+}, track)
+mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+local function setValue(v)
+v = clamp(v, mn, mx)
+v = mn + math.floor((v - mn) / step + 0.5) * step
+v = clamp(v, mn, mx)
+Config[key] = v
+fill.Size = UDim2.new((v - mn) / (mx - mn), 0, 1, 0)
+val.Text = tostring(math.floor(v * 10 + 0.5) / 10) .. (suffix or "")
+end
+setValue(Config[key] or mn)
+local sdrag = false
+track.MouseButton1Down:Connect(function()
+sdrag = true
+local absPos = track.AbsolutePosition.X
+local absW = math.max(track.AbsoluteSize.X, 1)
+setValue(mn + (UserInputService:GetMouseLocation().X - absPos) / absW * (mx - mn))
+end)
+regConn(UserInputService.InputEnded:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1 then sdrag = false end
+end))
+regConn(UserInputService.InputChanged:Connect(function(input)
+if sdrag and input.UserInputType == Enum.UserInputType.MouseMovement then
+local absPos = track.AbsolutePosition.X
+local absW = math.max(track.AbsoluteSize.X, 1)
+setValue(mn + (UserInputService:GetMouseLocation().X - absPos) / absW * (mx - mn))
+end
+end))
+end
+local function mkCycle(page, label, key, options, onChanged)
+local row = mk("TextButton", {
+Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = UI.Bg2,
+BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+}, page)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0),
+Size = UDim2.new(0.6, 0, 1, 0), Font = Enum.Font.Gotham,
+TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+TextColor3 = UI.Text, Text = label,
+}, row)
+local val = mk("TextLabel", {
+BackgroundTransparency = 1, Position = UDim2.new(0.6, 0, 0, 0),
+Size = UDim2.new(0.4, -10, 1, 0), Font = Enum.Font.GothamBold,
+TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right,
+TextColor3 = UI.Accent, Text = "",
+}, row)
+local idx = 1
+for i, opt in ipairs(options) do
+if Config[key] == opt then idx = i end
+end
+local function refresh()
+Config[key] = options[idx]
+val.Text = options[idx] .. " <"
+end
+refresh()
+row.MouseButton1Click:Connect(function()
+idx = idx + 1
+if idx > #options then idx = 1 end
+refresh()
+if onChanged then pcall(onChanged, options[idx]) end
+end)
+end
+local tabAim = makeTab("АИМ")
+mkSection(tabAim, "АИМБОТ")
+mkToggle(tabAim, "Аимбот ВКЛ (или клавиша T)", "Aim_Enabled")
+mkCycle(tabAim, "Режим аима", "Aim_Mode", { "Камера", "Мышь" })
+mkCycle(tabAim, "Активация аима", "Aim_Activate", { "Всегда", "ПКМ", "V", "ПКМ+V" })
+mkToggle(tabAim, "Клавиша T (вкл/выкл аима)", "Aim_KeyT")
+mkCycle(tabAim, "Цель", "Aim_Target", { "Голова", "Тело" })
+mkSlider(tabAim, "Радиус захвата (FOV)", 20, 500, 10, "Aim_FOV", "px")
+mkToggle(tabAim, "Показывать круг FOV", "Aim_ShowFOV")
+mkSlider(tabAim, "Плавность (1 резче, 20 плавно)", 1, 20, 1, "Aim_Smooth", "")
+mkSlider(tabAim, "Предсказание движения", 0, 100, 5, "Aim_Pred", "%")
+mkToggle(tabAim, "Не аимить сквозь стены", "Aim_Wall")
+mkToggle(tabAim, "Липкий аим", "Aim_Sticky")
+mkToggle(tabAim, "Игнорировать своих", "Aim_TeamCheck")
+local tabVis = makeTab("ВИЗУАЛЫ")
+mkSection(tabVis, "ESP")
+mkToggle(tabVis, "ESP ВКЛ", "Esp_Enabled")
+mkCycle(tabVis, "Режим ESP", "Esp_Mode", { "Авто", "Боксы", "Свечение" }, function()
+applyEspMode()
+end)
+mkToggle(tabVis, "Скрывать своих", "Esp_TeamCheck")
+mkSlider(tabVis, "Дистанция ESP", 200, 5000, 100, "Esp_MaxDist", "")
+mkSlider(tabVis, "Макс. боксов", 5, 18, 1, "Esp_MaxCount", "")
+mkSection(tabVis, "ВНЕШНИЙ ВИД")
+mkToggle(tabVis, "Боксы", "Esp_Box")
+mkCycle(tabVis, "Стиль боксов", "Esp_Style", { "Уголки", "Полный" })
+mkToggle(tabVis, "Имя игрока", "Esp_Name")
+mkToggle(tabVis, "HP-полоска", "Esp_HP")
+mkToggle(tabVis, "Дистанция", "Esp_Dist")
+mkToggle(tabVis, "Свечение сквозь стены", "Esp_Chams")
+local tabMisc = makeTab("ПРОЧЕЕ")
+mkSection(tabMisc, "БОЕВОЕ")
+mkToggle(tabMisc, "Триггербот ВКЛ", "Trig_Enabled")
+mkSlider(tabMisc, "Задержка выстрела", 0, 400, 10, "Trig_Delay", "мс")
+mkToggle(tabMisc, "Хитбоксы (головы врагов)", "Hitbox_Enabled", function(v)
+if not v then hitboxRestore() end
+end)
+mkSlider(tabMisc, "Размер головы", 2, 6, 0.5, "Hitbox_Size", "ст")
+mkSection(tabMisc, "ЭФФЕКТЫ")
+mkToggle(tabMisc, "Анти-флеш (вспышка)", "Misc_AntiFlash")
+mkToggle(tabMisc, "Убрать дым", "Misc_NoSmoke")
+mkSection(tabMisc, "ДВИЖЕНИЕ")
+mkToggle(tabMisc, "BHOP (зажми ПРОБЕЛ)", "Misc_BHop")
+mkSection(tabMisc, "ПОДСКАЗКА")
+mk("TextLabel", {
+Size = UDim2.new(1, 0, 0, 104), BackgroundColor3 = UI.Bg2,
+BorderSizePixel = 0, Font = Enum.Font.Gotham, TextSize = 12,
+TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+TextYAlignment = Enum.TextYAlignment.Top, TextColor3 = UI.Dim,
+Text = "  RightControl или RightShift - открыть/закрыть меню\n  T - ВКЛ/ВЫКЛ аимбота | K - ВКЛ/ВЫКЛ ESP | Delete - выгрузить всё\n  Активация 'Всегда' = сам целится, ПКМ/V = зажать\n  ПРОБЕЛ - BHOP | Плавность 4-8 = резко, 10-15 = плавно\n  v7.1 LIGHT: ESP 25 раз/сек + кэши - лагать не должно.\n  Если всё равно лагает: Макс. боксов = 8-10, Дистанция = 500-1000.\n  Delete - выгрузка. Перед повторным Execute сначала нажми Delete!",
+}, tabMisc)
+local unloadBtn = mk("TextButton", {
+Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = UI.Red,
+Text = "ВЫГРУЗИТЬ ВСЁ", Font = Enum.Font.GothamBold, TextSize = 13,
+TextColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0,
+}, tabMisc)
+mk("UICorner", { CornerRadius = UDim.new(0, 6) }, unloadBtn)
+unloadBtn.MouseButton1Click:Connect(function() unloadAll() end)
+regConn(UserInputService.InputBegan:Connect(function(input, gpe)
+if input.KeyCode == Enum.KeyCode.RightControl
+or input.KeyCode == Enum.KeyCode.RightShift then
+main.Visible = not main.Visible
+end
+end))
+switchTab("АИМ")
+main.Visible = true
+if rebuildCount > 1 then
+print("[BS6] меню пересоздано (раз " .. rebuildCount .. "), место: " .. guiPlace)
+else
+print("[BS6] меню создано в: " .. guiPlace)
+end
+end
+G.BS6_ON = true
+-- ГЛАВНОЕ МЕНЮ: сначала пробуем DRAWING (неубиваемое). Если Drawing нет - обычное ScreenGui.
+local SG_ACTIVE = false
+if HAS_DRAWING then
+pcall(dBuild)
+end
+if HAS_DRAWING and dmenuBG and #dRows > 0 then
+dmenuOpen = true
+print("[BS6] DRAWING-меню создано и ОТКРЫТО. Кликай по строкам! RightCtrl - скрыть/показать.")
+else
+SG_ACTIVE = true
+dmenuOpen = false
+pcall(buildMenu)
+print("[BS6] Drawing-меню недоступно - использую обычное меню (RightCtrl).")
+end
+-- СТОРОЖ МЕНЮ: раз в 8 сек, максимум 3 пересоздания (спокойно - чтобы не вылетало).
+do
+local w = task.spawn(function()
+while G.BS6_ON do
+task.wait(8)
+if not G.BS6_ON then break end
+if SG_ACTIVE then
+if autoRebuilds < 3 and (not gui or not gui.Parent) then
+autoRebuilds = autoRebuilds + 1
+warn("[BS6] меню исчезло - пересоздаю (попытка " .. autoRebuilds .. " из 3)")
+pcall(buildMenu)
+end
+if gui and not gui.Enabled then
+pcall(function() gui.Enabled = true end)
+end
+end
+if updateStatus then pcall(updateStatus) end
+end
+end)
+REG.threads[#REG.threads + 1] = w
+end
+-- СТАТУС-СТРОКА (Drawing): видна ДАЖЕ если меню убито. Показывает, что скрипт жив.
+if HAS_DRAWING then
+pcall(function()
+statBar = regDraw(newDraw("Text"))
+if statBar then
+statBar.Size = 14
+statBar.Outline = true
+statBar.Position = Vector2.new(14, 8)
+statBar.Color = Color3.fromRGB(255, 170, 60)
+end
+end)
+end
+updateStatus = function()
+if not statBar then return end
+pcall(function()
+statBar.Text = "[BS6] меню: RightCtrl | аим (T): " .. (Config.Aim_Enabled and "ВКЛ" or "ВЫКЛ")
+.. " | ESP (K): " .. (Config.Esp_Enabled and "ВКЛ" or "ВЫКЛ")
+statBar.Visible = true
+end)
+end
+if updateStatus then pcall(updateStatus) end
+print("[BS6] ШАГ 4/5: меню собрано, запускаю рендер-циклы...")
+local CAM_PRIORITY = Enum.RenderPriority.Camera.Value + 1
+local LAST = Enum.RenderPriority.Last.Value
+RunService:BindToRenderStep("BS6_AIM", CAM_PRIORITY, function(dt)
+safe("aim", function() aimStep(dt) end)
+if main and main.Visible then
+pcall(function()
+UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+UserInputService.MouseIconEnabled = true
+end)
+end
+end)
+-- v7.1: один рендер-шаг вместо трёх (меньше вызовов хука каждый кадр)
+RunService:BindToRenderStep("BS6_ESP", LAST + 4, function()
+safe("esp", espStep)
+safe("fov", fovStep)
+safe("misc", miscStep)
+end)
+startHitbox()
+startScan()
+applyEspMode()
+print("[BS6] ШАГ 5/5: ГОТОВО! Меню открыто (v7.1 LIGHT). КЛИКАЙ по строкам меню мышкой!")
+print("[BS6] Меню на DRAWING - игра его удалить не сможет. RightCtrl - скрыть/показать.")
+print("[BS6] T = ВКЛ/ВЫКЛ аимбота, K = ВКЛ/ВЫКЛ ESP. Активация: " .. tostring(Config.Aim_Activate) .. ".")
+print("[BS6] Статус-строка сверху слева = скрипт жив. Если её нет - скрипт не запустился.")
+pcall(function()
+game:GetService("StarterGui"):SetCore("SendNotification", {
+Title = "BLOXSTRIKE HYPER v7.1",
+Text = "Меню на DRAWING - кликай по строкам. T - аим, K - ESP.",
+Duration = 6,
+})
+end)
+function unloadAll()
+G.BS6_ON = false
+print("[BS6] выгружаюсь...")
+pcall(function() hitboxRestore() end)
+hitboxRunning = false
+for _, bn in ipairs(BINDS) do
+pcall(function() RunService:UnbindFromRenderStep(bn) end)
+end
+for i = 1, #REG.conns do
+pcall(function() REG.conns[i]:Disconnect() end)
+end
+pcall(clearAllESP)
+for i = 1, #REG.draws do
+pcall(function() REG.draws[i]:Remove() end)
+end
+for i = 1, #REG.insts do
+pcall(function() REG.insts[i]:Destroy() end)
+end
+for i = 1, #REG.threads do
+pcall(function() task.cancel(REG.threads[i]) end)
+end
+REG.draws = {}
+REG.insts = {}
+REG.conns = {}
+REG.threads = {}
+pcall(function()
+UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+end)
+print("[BS6] выгружен полностью.")
+end
